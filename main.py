@@ -11,7 +11,7 @@ import json
 
 # Page configuration
 st.set_page_config(
-    page_title="Tahoe Cabin Reservations",
+    page_title="Schieberl Cabin Reservations",
     page_icon="🏔️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -398,7 +398,7 @@ def admin_panel(df):
 
 def public_view(df):
     """Public calendar view for guests"""
-    st.markdown('<p class="main-header">🏔️ Tahoe Cabin Reservations</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">🏔️ Schieberl Cabin Reservations</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">View availability and upcoming reservations</p>', unsafe_allow_html=True)
     
     # Calendar controls
@@ -473,7 +473,7 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.title("🏔️ Tahoe Cabin")
+        st.title("🏔️ Schieberl Cabin")
         
         # Admin toggle
         admin_password = st.text_input("Admin Password", type="password")
@@ -502,41 +502,18 @@ def main():
         3. **Calendar** shows approved reservations
         4. **Everyone** can view availability
         """)
-        
-        # Google Sheets setup info
-        if st.session_state.admin_mode:
-            with st.expander("🔧 Setup Instructions"):
-                st.markdown("""
-                **Google Sheets Integration:**
-                1. Create a Google Form for reservations
-                2. Link form responses to Google Sheets
-                3. Set up Google Sheets API credentials
-                4. Update the `connect_to_google_sheets()` function
-                5. Add credentials to Streamlit secrets
-                
-                **Required columns in Google Sheets (exact order):**
-                - Timestamp
-                - Email Address
-                - Guest Name  
-                - Phone Number
-                - Check-In
-                - Check-Out
-                - Number of Guests
-                - Notes
-                - Status (add manually for admin approval)
-                """)
     
     # Load data
     df = load_google_sheets_data()
     
     # Debug: Show column names (remove this in production)
-    if st.session_state.admin_mode:
-        with st.expander("🐛 Debug Info"):
-            st.write("DataFrame columns:", list(df.columns))
-            st.write("DataFrame shape:", df.shape)
-            if not df.empty:
-                st.write("Sample data:")
-                st.dataframe(df.head())
+    # if st.session_state.admin_mode:
+    #     with st.expander("Debug Info"):
+    #         st.write("DataFrame columns:", list(df.columns))
+    #         st.write("DataFrame shape:", df.shape)
+    #         if not df.empty:
+    #             st.write("Sample data:")
+    #             st.dataframe(df.head())
     
     # Main content
     if st.session_state.admin_mode and view_mode == "Admin Panel":
@@ -548,7 +525,7 @@ def main():
     st.divider()
     st.markdown("""
     <div style='text-align: center; color: #6b7280; font-size: 0.875rem;'>
-        Built with ❤️ using Streamlit • Last updated: August 2025
+        Built by Eliot using Streamlit • Last updated: August 2025
     </div>
     """, unsafe_allow_html=True)
 
