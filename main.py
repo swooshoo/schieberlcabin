@@ -120,7 +120,7 @@ def connect_to_google_sheets():
     """
     pass
 
-def create_calendar_view(df, selected_month, selected_year):
+def create_calendar_view(df, selected_month, selected_year, is_admin=False):
     """Create an interactive calendar view using Plotly"""
     
     # Check if DataFrame is empty or missing required columns
@@ -169,14 +169,27 @@ def create_calendar_view(df, selected_month, selected_year):
                         break
                 
                 if reservation is not None:
-                    if 'Status' in reservation:
-                        status_color = 1 if reservation['Status'] == 'Approved' else 0.5 if reservation['Status'] == 'Pending' else 0.2
+                    if is_admin:
+                        # Admin view: show all reservation statuses with full details
+                        if 'Status' in reservation:
+                            status_color = 1 if reservation['Status'] == 'Approved' else 0.5 if reservation['Status'] == 'Pending' else 0.2
+                        else:
+                            status_color = 0.5  # Default to pending if no status
+                        # Format number of guests as integer
+                        guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+                        hover_text = f"Date: {date}<br>Guest: {reservation['Guest Name']}<br>Status: {reservation.get('Status', 'Pending')}<br>Party: {guest_count} people"
+                        day_text = f"{day}<br>{reservation['Guest Name'][:8]}..."
                     else:
-                        status_color = 0.5  # Default to pending if no status
-                    # Format number of guests as integer
-                    guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
-                    hover_text = f"Date: {date}<br>Guest: {reservation['Guest Name']}<br>Status: {reservation.get('Status', 'Pending')}<br>Party: {guest_count} people"
-                    day_text = f"{day}<br>{reservation['Guest Name'][:8]}..."
+                        # Public view: only show approved reservations without details
+                        if 'Status' in reservation and reservation['Status'] == 'Approved':
+                            status_color = 1  # Green for approved
+                            hover_text = f"Date: {date}<br>Reserved"  # No guest details
+                            day_text = str(day)  # Just show day number
+                        else:
+                            # Don't show pending or denied reservations in public view
+                            status_color = 0
+                            hover_text = f"Date: {date}<br>Available"
+                            day_text = str(day)
                 else:
                     status_color = 0
                     hover_text = f"Date: {date}<br>Available"
@@ -350,7 +363,7 @@ def admin_panel(df):
                                          key="admin_year_select")
     
     # Display admin calendar (using same function as public view)
-    admin_calendar_fig = create_calendar_view(df, admin_selected_month, admin_selected_year)
+    admin_calendar_fig = create_calendar_view(df, admin_selected_month, admin_selected_year, is_admin=True)
     st.plotly_chart(admin_calendar_fig, use_container_width=True)
     
     # Legend for admin calendar
@@ -497,14 +510,13 @@ def public_view(df):
                                     index=0)
     
     # Display calendar
-    calendar_fig = create_calendar_view(df, selected_month, selected_year)
+    calendar_fig = create_calendar_view(df, selected_month, selected_year, is_admin=False)
     st.plotly_chart(calendar_fig, use_container_width=True)
     
-    # Legend
+    # Legend (updated for public view)
     st.markdown("""
     **Legend:**
-    - 🟢 Green: Approved reservation
-    - 🟡 Yellow: Pending approval
+    - 🟢 Green: Reserved
     - ⚪ White: Available
     """)
     
