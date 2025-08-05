@@ -297,7 +297,7 @@ def update_reservation_status(reservation_id, new_status):
 
 def admin_panel(df):
     """Admin panel for managing reservations"""
-    st.header("🔧 Admin Panel")
+    st.header("Admin Panel")
     
     # Check if DataFrame is empty
     if df.empty:
@@ -492,7 +492,8 @@ def admin_panel(df):
 
 def public_view(df):
     """Public calendar view for guests"""
-    st.markdown('<p class="main-header">🏔️ Schieberl Cabin Reservations</p>', unsafe_allow_html=True)
+    st.header("Schieberl Cabin Reservations")
+    #st.markdown('<p class="main-header">🏔️ Schieberl Cabin Reservations</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">View availability and upcoming reservations</p>', unsafe_allow_html=True)
     
     # Calendar controls
@@ -556,11 +557,10 @@ def public_view(df):
     # Reservation form link
     st.subheader("📝 Make a Reservation")
     st.markdown("""
-    To request a reservation, please fill out our Google Form:
+    To request a reservation, please fill out the Google Form below:
     
     [**🔗 Cabin Reservation Request Form**](https://forms.google.com/your-form-link)
     
-    *Note: All reservations are subject to approval. You will receive confirmation within 24-48 hours.*
     """)
 
 def main():
