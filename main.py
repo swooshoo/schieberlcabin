@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import json
+import time
 
 # Page configuration
 st.set_page_config(
@@ -56,12 +57,36 @@ st.markdown("""
         font-weight: 500;
     }
     .reservation-card {
-        border: 1px solid #4b5563;
+        border: 2px solid #4b5563;
         border-radius: 0.5rem;
         padding: 1rem;
         margin-bottom: 1rem;
         background-color: #374151;
         color: white;
+    }
+    .pending-column {
+        background-color: #fef3c7;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem;
+    }
+    .approved-column {
+        background-color: #d1fae5;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem;
+    }
+    .denied-column {
+        background-color: #fee2e2;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem;
+    }
+    .column-header {
+        font-weight: bold;
+        font-size: 1.2rem;
+        text-align: center;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -71,6 +96,8 @@ if 'admin_mode' not in st.session_state:
     st.session_state.admin_mode = False
 if 'selected_date' not in st.session_state:
     st.session_state.selected_date = datetime.now().date()
+if 'refresh_data' not in st.session_state:
+    st.session_state.refresh_data = 0
 
 def load_google_sheets_data():
     """
@@ -80,8 +107,11 @@ def load_google_sheets_data():
         # Create a connection object
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # Read the Google Sheet data with a caching mechanism
-        df = conn.read(ttl="10s")
+        # Use session state to force refresh when needed
+        refresh_key = f"data_{st.session_state.refresh_data}"
+        
+        # Read the Google Sheet data with a shorter TTL and refresh key
+        df = conn.read(ttl="1s", key=refresh_key)
         
         # Handle empty DataFrame
         if df.empty:
@@ -113,12 +143,28 @@ def load_google_sheets_data():
         st.info("Check your Google Sheets setup and credentials.")
         return pd.DataFrame()
 
-def connect_to_google_sheets():
-    """
-    Setup Google Sheets connection
-    You'll need to add your credentials here
-    """
-    pass
+def update_reservation_status(df, row_index, new_status):
+    """Update reservation status in Google Sheets"""
+    try:
+        # Create a connection object
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        
+        # Create a copy of the dataframe to modify
+        updated_df = df.copy()
+        
+        # Update the status for the specific row
+        updated_df.at[row_index, 'Status'] = new_status
+        
+        # Update the Google Sheet
+        conn.update(data=updated_df)
+        
+        # Force data refresh by incrementing the session state counter
+        st.session_state.refresh_data += 1
+        
+        return True, f"Status updated to {new_status} successfully!"
+        
+    except Exception as e:
+        return False, f"Error updating Google Sheets: {str(e)}"
 
 def create_calendar_view(df, selected_month, selected_year, is_admin=False):
     """Create an interactive calendar view using Plotly"""
@@ -289,14 +335,60 @@ def create_empty_calendar(selected_month, selected_year):
     
     return fig
 
-def update_reservation_status(reservation_id, new_status):
-    """Update reservation status in Google Sheets"""
-    # This would update the Google Sheet
-    # For demo, we'll just show a success message
-    st.success(f"Reservation status updated to: {new_status}")
+def render_reservation_card(reservation, idx, status_type):
+    """Render a reservation card with appropriate styling and actions"""
+    guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+    
+    with st.container(border=True):
+        # Guest information
+        st.write(f"**{reservation['Guest Name']}**")
+        st.write(f"📧 {reservation['Email Address']}")
+        st.write(f"📱 {reservation['Phone Number']}")
+        st.write(f"👥 {guest_count} guests")
+        
+        # Date information
+        checkin_day = reservation['Check-In'].strftime('%A')
+        checkout_day = reservation['Check-Out'].strftime('%A')
+        st.write(f"📅 **Check-in:** {reservation['Check-In']}, {checkin_day}")
+        st.write(f"📅 **Check-out:** {reservation['Check-Out']}, {checkout_day}")
+        duration = (reservation['Check-Out'] - reservation['Check-In']).days
+        st.write(f"🏠 **Duration:** {duration} nights")
+        
+        # Notes
+        if reservation['Notes'] and str(reservation['Notes']).strip():
+            st.write(f"📝 **Notes:** {reservation['Notes']}")
+        
+        # Admin notes for denied reservations
+        if status_type == 'Denied' and 'Admin Notes' in reservation and reservation['Admin Notes']:
+            st.write(f"❌ **Admin Notes:** {reservation['Admin Notes']}")
+        
+        # Action buttons based on status
+        if status_type == 'Pending':
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Approve", key=f"approve_{idx}", use_container_width=True):
+                    return "approve"
+            with col2:
+                if st.button("❌ Deny", key=f"deny_{idx}", use_container_width=True):
+                    return "deny"
+        
+        elif status_type == 'Approved':
+            if st.button("🔄 Move to Pending", key=f"pending_{idx}", use_container_width=True):
+                return "pending"
+        
+        elif status_type == 'Denied':
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Approve", key=f"approve_denied_{idx}", use_container_width=True):
+                    return "approve"
+            with col2:
+                if st.button("🔄 Move to Pending", key=f"pending_denied_{idx}", use_container_width=True):
+                    return "pending"
+        
+    return None
 
 def admin_panel(df):
-    """Admin panel for managing reservations"""
+    """Enhanced admin panel with three-column layout for reservation management"""
     st.header("Admin Panel")
     
     # Check if DataFrame is empty
@@ -321,24 +413,15 @@ def admin_panel(df):
         st.metric("Total Reservations", total_reservations)
     
     with col2:
-        if 'Status' in df.columns:
-            pending_count = len(df[df['Status'] == 'Pending'])
-        else:
-            pending_count = len(df)  # All are pending if no Status column
+        pending_count = len(df[df['Status'] == 'Pending'])
         st.metric("Pending Approval", pending_count)
     
     with col3:
-        if 'Status' in df.columns:
-            approved_count = len(df[df['Status'] == 'Approved'])
-        else:
-            approved_count = 0
+        approved_count = len(df[df['Status'] == 'Approved'])
         st.metric("Approved", approved_count)
     
     with col4:
-        if 'Status' in df.columns:
-            denied_count = len(df[df['Status'] == 'Denied'])
-        else:
-            denied_count = 0
+        denied_count = len(df[df['Status'] == 'Denied'])
         st.metric("Denied", denied_count)
     
     st.divider()
@@ -346,7 +429,7 @@ def admin_panel(df):
     # Admin Calendar Section
     st.subheader("📅 Admin Calendar")
     
-    # Calendar controls (same as public view)
+    # Calendar controls
     col1, col2 = st.columns(2)
     
     with col1:
@@ -362,7 +445,7 @@ def admin_panel(df):
                                          index=0,
                                          key="admin_year_select")
     
-    # Display admin calendar (using same function as public view)
+    # Display admin calendar
     admin_calendar_fig = create_calendar_view(df, admin_selected_month, admin_selected_year, is_admin=True)
     st.plotly_chart(admin_calendar_fig, use_container_width=True)
     
@@ -371,90 +454,116 @@ def admin_panel(df):
     **Legend:**
     - 🟢 Green: Approved reservation
     - 🟡 Yellow: Pending approval
+    - 🔴 Red: Denied reservation
     - ⚪ White: Available
     """)
     
-    # Upcoming reservations in admin view
-    st.subheader("📅 Upcoming Reservations")
+    st.divider()
     
-    # Filter for future approved reservations (same logic as public view)
-    today = datetime.now().date()
-    if 'Status' in df.columns:
-        upcoming = df[(df['Check-In'] >= today) & (df['Status'] == 'Approved')].copy()
-    else:
-        # If no Status column, show all future reservations
-        upcoming = df[df['Check-In'] >= today].copy()
-    upcoming = upcoming.sort_values('Check-In')
+    # Three-column reservation management
+    st.subheader("📋 Reservation Management")
     
-    if not upcoming.empty:
-        for _, reservation in upcoming.iterrows():
-            # Format number of guests as integer
-            guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
-            with st.container():
-                st.markdown(f"""
-                <div class="reservation-card">
-                    <strong>{reservation['Guest Name']}</strong><br>
-                    📅 {reservation['Check-In']} to {reservation['Check-Out']}<br>
-                    👥 {guest_count} guests<br>
-                    <span class="status-approved">{'Approved' if 'Status' in reservation and reservation['Status'] == 'Approved' else 'Pending Review'}</span>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("No upcoming approved reservations.")
+    # Filter reservations by status using fresh data
+    pending_reservations = df[df['Status'] == 'Pending'].copy()
+    approved_reservations = df[df['Status'] == 'Approved'].copy()
+    denied_reservations = df[df['Status'] == 'Denied'].copy()
+    
+    # Create three columns
+    col1, col2, col3 = st.columns(3)
+    
+    # Pending Reservations Column
+    with col1:
+        st.markdown('<div class="pending-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">⏳ Pending Reservations</div>', unsafe_allow_html=True)
+        
+        if not pending_reservations.empty:
+            for idx, reservation in pending_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Pending')
+                
+                if action == "approve":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Approved')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)  # Brief pause to ensure update completes
+                            st.rerun()
+                        else:
+                            st.error(message)
+                
+                elif action == "deny":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Denied')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)  # Brief pause to ensure update completes
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No pending reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Approved Reservations Column
+    with col2:
+        st.markdown('<div class="approved-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">✅ Approved Reservations</div>', unsafe_allow_html=True)
+        
+        if not approved_reservations.empty:
+            for idx, reservation in approved_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Approved')
+                
+                if action == "pending":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Pending')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)  # Brief pause to ensure update completes
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No approved reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Denied Reservations Column
+    with col3:
+        st.markdown('<div class="denied-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">❌ Denied Reservations</div>', unsafe_allow_html=True)
+        
+        if not denied_reservations.empty:
+            for idx, reservation in denied_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Denied')
+                
+                if action == "approve":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Approved')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)  # Brief pause to ensure update completes
+                            st.rerun()
+                        else:
+                            st.error(message)
+                
+                elif action == "pending":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Pending')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)  # Brief pause to ensure update completes
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No denied reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
     
     st.divider()
     
-    # Pending reservations for review
-    if 'Status' in df.columns:
-        pending_reservations = df[df['Status'] == 'Pending'].copy()
-    else:
-        # If no Status column, treat all as pending
-        pending_reservations = df.copy()
-        pending_reservations['Status'] = 'Pending'
-    
-    if not pending_reservations.empty:
-        st.subheader("⏳ Pending Reservations")
-        
-        for idx, reservation in pending_reservations.iterrows():
-            with st.container():
-                st.markdown('<div class="reservation-card">', unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns([2, 2, 1])
-                
-                with col1:
-                    st.write(f"**{reservation['Guest Name']}**")
-                    st.write(f"📧 {reservation['Email Address']}")
-                    st.write(f"📱 {reservation['Phone Number']}")
-                    # Format number of guests as integer
-                    guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
-                    st.write(f"👥 {guest_count} guests")
-                
-                with col2:
-                    checkin_day = reservation['Check-In'].strftime('%A')
-                    checkout_day = reservation['Check-Out'].strftime('%A')
-                    st.write(f"📅 **Check-in:** {reservation['Check-In']}, {checkin_day}")
-                    st.write(f"📅 **Check-out:** {reservation['Check-Out']}, {checkout_day}")
-                    duration = (reservation['Check-Out'] - reservation['Check-In']).days
-                    st.write(f"🏠 **Duration:** {duration} nights")
-                    if reservation['Notes'] and str(reservation['Notes']).strip():
-                        st.write(f"📝 **Notes:** {reservation['Notes']}")
-                
-                with col3:
-                    if st.button("✅ Approve", key=f"approve_{idx}"):
-                        update_reservation_status(idx, "Approved")
-                        st.rerun()
-                    
-                    if st.button("❌ Deny", key=f"deny_{idx}"):
-                        update_reservation_status(idx, "Denied")
-                        st.rerun()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-                st.divider()
-    else:
-        st.info("No pending reservations to review.")
-    
-    # All reservations table
-    st.subheader("📋 All Reservations")
+    # All reservations table (existing functionality)
+    st.subheader("📋 All Reservations Table")
     
     # Filter options
     col1, col2 = st.columns(2)
@@ -466,14 +575,14 @@ def admin_panel(df):
     
     # Apply filters
     filtered_df = df.copy()
-    if status_filter != 'All' and 'Status' in df.columns:
+    if status_filter != 'All':
         filtered_df = filtered_df[filtered_df['Status'] == status_filter]
     
     if month_filter != 'All':
         month_num = list(calendar.month_name).index(month_filter)
         filtered_df = filtered_df[filtered_df['Check-In'].apply(lambda x: x.month) == month_num]
     
-    # Format the dataframe for display - ensure Number of Guests shows as integer
+    # Format the dataframe for display
     display_df = filtered_df.copy()
     if 'Number of Guests' in display_df.columns:
         display_df['Number of Guests'] = display_df['Number of Guests'].astype(int)
@@ -485,7 +594,7 @@ def admin_panel(df):
         column_config={
             "Number of Guests": st.column_config.NumberColumn(
                 "Number of Guests",
-                format="%d"  # Display as integer without decimals
+                format="%d"
             )
         }
     )
@@ -493,7 +602,6 @@ def admin_panel(df):
 def public_view(df):
     """Public calendar view for guests"""
     st.header("Schieberl Cabin Reservations")
-    #st.markdown('<p class="main-header">🏔️ Schieberl Cabin Reservations</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">View availability and upcoming reservations</p>', unsafe_allow_html=True)
     
     # Calendar controls
@@ -531,11 +639,7 @@ def public_view(df):
     
     # Filter for future approved reservations
     today = datetime.now().date()
-    if 'Status' in df.columns:
-        upcoming = df[(df['Check-In'] >= today) & (df['Status'] == 'Approved')].copy()
-    else:
-        # If no Status column, show all future reservations
-        upcoming = df[df['Check-In'] >= today].copy()
+    upcoming = df[(df['Check-In'] >= today) & (df['Status'] == 'Approved')].copy()
     upcoming = upcoming.sort_values('Check-In')
     
     if not upcoming.empty:
@@ -548,7 +652,7 @@ def public_view(df):
                     <strong>{reservation['Guest Name']}</strong><br>
                     📅 {reservation['Check-In']} to {reservation['Check-Out']}<br>
                     👥 {guest_count} guests<br>
-                    <span class="status-approved">{'Approved' if 'Status' in reservation and reservation['Status'] == 'Approved' else 'Pending Review'}</span>
+                    <span class="status-approved">Approved</span>
                 </div>
                 """, unsafe_allow_html=True)
     else:
@@ -600,15 +704,6 @@ def main():
     
     # Load data
     df = load_google_sheets_data()
-    
-    # Debug: Show column names (remove this in production)
-    # if st.session_state.admin_mode:
-    #     with st.expander("Debug Info"):
-    #         st.write("DataFrame columns:", list(df.columns))
-    #         st.write("DataFrame shape:", df.shape)
-    #         if not df.empty:
-    #             st.write("Sample data:")
-    #             st.dataframe(df.head())
     
     # Main content
     if st.session_state.admin_mode and view_mode == "Admin Panel":
