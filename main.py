@@ -96,9 +96,11 @@ def load_google_sheets_data():
         if 'Timestamp' in df.columns:
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
         
-        # Convert Number of Guests to numeric (since it comes as string from form)
+        # Convert Number of Guests to numeric and ensure it's displayed as integer
         if 'Number of Guests' in df.columns:
             df['Number of Guests'] = pd.to_numeric(df['Number of Guests'], errors='coerce')
+            # Fill any NaN values with 0 and convert to int
+            df['Number of Guests'] = df['Number of Guests'].fillna(0).astype(int)
         
         # Handle any rows with invalid dates
         if 'Check-In' in df.columns and 'Check-Out' in df.columns:
@@ -171,7 +173,9 @@ def create_calendar_view(df, selected_month, selected_year):
                         status_color = 1 if reservation['Status'] == 'Approved' else 0.5 if reservation['Status'] == 'Pending' else 0.2
                     else:
                         status_color = 0.5  # Default to pending if no status
-                    hover_text = f"Date: {date}<br>Guest: {reservation['Guest Name']}<br>Status: {reservation.get('Status', 'Pending')}<br>Party: {reservation['Number of Guests']} people"
+                    # Format number of guests as integer
+                    guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+                    hover_text = f"Date: {date}<br>Guest: {reservation['Guest Name']}<br>Status: {reservation.get('Status', 'Pending')}<br>Party: {guest_count} people"
                     day_text = f"{day}<br>{reservation['Guest Name'][:8]}..."
                 else:
                     status_color = 0
@@ -326,6 +330,67 @@ def admin_panel(df):
     
     st.divider()
     
+    # Admin Calendar Section
+    st.subheader("📅 Admin Calendar")
+    
+    # Calendar controls (same as public view)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        admin_selected_month = st.selectbox("Month", 
+                                           options=list(range(1, 13)),
+                                           format_func=lambda x: calendar.month_name[x],
+                                           index=datetime.now().month - 1,
+                                           key="admin_month_select")
+    
+    with col2:
+        admin_selected_year = st.selectbox("Year", 
+                                         options=list(range(2025, 2028)),
+                                         index=0,
+                                         key="admin_year_select")
+    
+    # Display admin calendar (using same function as public view)
+    admin_calendar_fig = create_calendar_view(df, admin_selected_month, admin_selected_year)
+    st.plotly_chart(admin_calendar_fig, use_container_width=True)
+    
+    # Legend for admin calendar
+    st.markdown("""
+    **Legend:**
+    - 🟢 Green: Approved reservation
+    - 🟡 Yellow: Pending approval
+    - ⚪ White: Available
+    """)
+    
+    # Upcoming reservations in admin view
+    st.subheader("📅 Upcoming Reservations")
+    
+    # Filter for future approved reservations (same logic as public view)
+    today = datetime.now().date()
+    if 'Status' in df.columns:
+        upcoming = df[(df['Check-In'] >= today) & (df['Status'] == 'Approved')].copy()
+    else:
+        # If no Status column, show all future reservations
+        upcoming = df[df['Check-In'] >= today].copy()
+    upcoming = upcoming.sort_values('Check-In')
+    
+    if not upcoming.empty:
+        for _, reservation in upcoming.iterrows():
+            # Format number of guests as integer
+            guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+            with st.container():
+                st.markdown(f"""
+                <div class="reservation-card">
+                    <strong>{reservation['Guest Name']}</strong><br>
+                    📅 {reservation['Check-In']} to {reservation['Check-Out']}<br>
+                    👥 {guest_count} guests<br>
+                    <span class="status-approved">{'Approved' if 'Status' in reservation and reservation['Status'] == 'Approved' else 'Pending Review'}</span>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No upcoming approved reservations.")
+    
+    st.divider()
+    
     # Pending reservations for review
     if 'Status' in df.columns:
         pending_reservations = df[df['Status'] == 'Pending'].copy()
@@ -347,7 +412,9 @@ def admin_panel(df):
                     st.write(f"**{reservation['Guest Name']}**")
                     st.write(f"📧 {reservation['Email Address']}")
                     st.write(f"📱 {reservation['Phone Number']}")
-                    st.write(f"👥 {reservation['Number of Guests']} guests")
+                    # Format number of guests as integer
+                    guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+                    st.write(f"👥 {guest_count} guests")
                 
                 with col2:
                     checkin_day = reservation['Check-In'].strftime('%A')
@@ -393,8 +460,22 @@ def admin_panel(df):
         month_num = list(calendar.month_name).index(month_filter)
         filtered_df = filtered_df[filtered_df['Check-In'].apply(lambda x: x.month) == month_num]
     
-    # Display table
-    st.dataframe(filtered_df, use_container_width=True)
+    # Format the dataframe for display - ensure Number of Guests shows as integer
+    display_df = filtered_df.copy()
+    if 'Number of Guests' in display_df.columns:
+        display_df['Number of Guests'] = display_df['Number of Guests'].astype(int)
+    
+    # Display table with better formatting
+    st.dataframe(
+        display_df, 
+        use_container_width=True,
+        column_config={
+            "Number of Guests": st.column_config.NumberColumn(
+                "Number of Guests",
+                format="%d"  # Display as integer without decimals
+            )
+        }
+    )
 
 def public_view(df):
     """Public calendar view for guests"""
@@ -446,12 +527,14 @@ def public_view(df):
     
     if not upcoming.empty:
         for _, reservation in upcoming.iterrows():
+            # Format number of guests as integer
+            guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
             with st.container():
                 st.markdown(f"""
                 <div class="reservation-card">
                     <strong>{reservation['Guest Name']}</strong><br>
                     📅 {reservation['Check-In']} to {reservation['Check-Out']}<br>
-                    👥 {reservation['Number of Guests']} guests<br>
+                    👥 {guest_count} guests<br>
                     <span class="status-approved">{'Approved' if 'Status' in reservation and reservation['Status'] == 'Approved' else 'Pending Review'}</span>
                 </div>
                 """, unsafe_allow_html=True)
