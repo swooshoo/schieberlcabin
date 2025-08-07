@@ -107,11 +107,8 @@ def load_google_sheets_data():
         # Create a connection object
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # Use session state to force refresh when needed
-        refresh_key = f"data_{st.session_state.refresh_data}"
-        
-        # Read the Google Sheet data with a shorter TTL and refresh key
-        df = conn.read(ttl="1s", key=refresh_key)
+        # Read the Google Sheet data with a caching mechanism
+        df = conn.read(ttl="10s")
         
         # Handle empty DataFrame
         if df.empty:
@@ -131,6 +128,14 @@ def load_google_sheets_data():
             df['Number of Guests'] = pd.to_numeric(df['Number of Guests'], errors='coerce')
             # Fill any NaN values with 0 and convert to int
             df['Number of Guests'] = df['Number of Guests'].fillna(0).astype(int)
+        
+        # Default Status column to 'Pending' if it doesn't exist or has empty values
+        if 'Status' not in df.columns:
+            df['Status'] = 'Pending'
+        else:
+            # Fill any empty or NaN values in Status column with 'Pending'
+            df['Status'] = df['Status'].fillna('Pending')
+            df['Status'] = df['Status'].replace('', 'Pending')
         
         # Handle any rows with invalid dates
         if 'Check-In' in df.columns and 'Check-Out' in df.columns:
