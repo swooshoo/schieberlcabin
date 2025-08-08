@@ -129,6 +129,30 @@ def load_google_sheets_data():
             # Fill any NaN values with 0 and convert to int
             df['Number of Guests'] = df['Number of Guests'].fillna(0).astype(int)
         
+        # FIX FOR PHONE NUMBER FORMATTING
+        if 'Phone Number' in df.columns:
+            # Convert all phone numbers to strings and handle NaN values
+            df['Phone Number'] = df['Phone Number'].astype(str)
+            # Replace 'nan' strings with empty strings
+            df['Phone Number'] = df['Phone Number'].replace('nan', '')
+            # Optional: Format phone numbers consistently
+            df['Phone Number'] = df['Phone Number'].apply(format_phone_number)
+        
+        # Also ensure Email Address is string type (in case of similar issues)
+        if 'Email Address' in df.columns:
+            df['Email Address'] = df['Email Address'].astype(str)
+            df['Email Address'] = df['Email Address'].replace('nan', '')
+        
+        # Ensure Guest Name is string type
+        if 'Guest Name' in df.columns:
+            df['Guest Name'] = df['Guest Name'].astype(str)
+            df['Guest Name'] = df['Guest Name'].replace('nan', '')
+        
+        # Ensure Notes is string type
+        if 'Notes' in df.columns:
+            df['Notes'] = df['Notes'].astype(str)
+            df['Notes'] = df['Notes'].replace('nan', '')
+        
         # Default Status column to 'Pending' if it doesn't exist or has empty values
         if 'Status' not in df.columns:
             df['Status'] = 'Pending'
@@ -136,6 +160,7 @@ def load_google_sheets_data():
             # Fill any empty or NaN values in Status column with 'Pending'
             df['Status'] = df['Status'].fillna('Pending')
             df['Status'] = df['Status'].replace('', 'Pending')
+            df['Status'] = df['Status'].astype(str)  # Ensure it's string type
         
         # Handle any rows with invalid dates
         if 'Check-In' in df.columns and 'Check-Out' in df.columns:
@@ -147,6 +172,27 @@ def load_google_sheets_data():
         st.error(f"Error loading data from Google Sheets: {str(e)}")
         st.info("Check your Google Sheets setup and credentials.")
         return pd.DataFrame()
+
+def format_phone_number(phone):
+    """
+    Format phone number consistently
+    """
+    if not phone or phone == '' or phone == 'nan':
+        return ''
+    
+    # Remove all non-digit characters
+    digits_only = ''.join(filter(str.isdigit, str(phone)))
+    
+    # Handle different length phone numbers
+    if len(digits_only) == 10:
+        # Format as (XXX) XXX-XXXX
+        return f"({digits_only[:3]}) {digits_only[3:6]}-{digits_only[6:]}"
+    elif len(digits_only) == 11 and digits_only[0] == '1':
+        # Handle +1 country code
+        return f"({digits_only[1:4]}) {digits_only[4:7]}-{digits_only[7:]}"
+    else:
+        # Return as-is if it doesn't match expected formats
+        return str(phone)
 
 def update_reservation_status(df, row_index, new_status):
     """Update reservation status in Google Sheets"""
