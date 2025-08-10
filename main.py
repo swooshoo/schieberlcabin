@@ -218,7 +218,7 @@ def update_reservation_status(df, row_index, new_status):
         return False, f"Error updating Google Sheets: {str(e)}"
 
 def create_calendar_view(df, selected_month, selected_year, is_admin=False):
-    """Create an interactive calendar view using Plotly"""
+    """Create a calendar view using Plotly with outlined reservation indicators"""
     
     # Check if DataFrame is empty or missing required columns
     if df.empty:
@@ -254,15 +254,27 @@ def create_calendar_view(df, selected_month, selected_year, is_admin=False):
     for week_num, week in enumerate(cal):
         for day_num, day in enumerate(week):
             if day == 0:
-                calendar_data.append([week_num, day_num, 0, "", ""])
+                calendar_data.append([week_num, day_num, 0, "", "", ""])
             else:
                 date = datetime(selected_year, selected_month, day).date()
                 
                 # Check if there's a reservation for this date in the filtered data
                 reservation = None
+                reservation_position = ""  # "start", "middle", "end", or "single"
+                
                 for _, row in month_reservations.iterrows():
                     if row['Check-In'] <= date <= row['Check-Out']:
                         reservation = row
+                        
+                        # Determine position in reservation
+                        if row['Check-In'] == date and row['Check-Out'] == date:
+                            reservation_position = "single"
+                        elif row['Check-In'] == date:
+                            reservation_position = "start"
+                        elif row['Check-Out'] == date:
+                            reservation_position = "end"
+                        else:
+                            reservation_position = "middle"
                         break
                 
                 if reservation is not None:
@@ -275,37 +287,40 @@ def create_calendar_view(df, selected_month, selected_year, is_admin=False):
                         # Format number of guests as integer
                         guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
                         hover_text = f"Date: {date}<br>Guest: {reservation['Guest Name']}<br>Status: {reservation.get('Status', 'Pending')}<br>Party: {guest_count} people"
-                        day_text = f"{day}<br>{reservation['Guest Name'][:8]}..."
+                        
+                        # Create day text
+                        guest_name_short = reservation['Guest Name'][:6] + "..." if len(reservation['Guest Name']) > 6 else reservation['Guest Name']
+                        day_text = f"{day}<br>{guest_name_short}"
                     else:
                         # Public view: only show approved reservations without details
                         if 'Status' in reservation and reservation['Status'] == 'Approved':
                             status_color = 1  # Green for approved
                             hover_text = f"Date: {date}<br>Reserved"  # No guest details
-                            day_text = str(day)  # Just show day number
+                            day_text = str(day)
                         else:
                             # Don't show pending or denied reservations in public view
                             status_color = 0
                             hover_text = f"Date: {date}<br>Available"
                             day_text = str(day)
+                            reservation_position = ""
                 else:
                     status_color = 0
                     hover_text = f"Date: {date}<br>Available"
                     day_text = str(day)
                 
-                calendar_data.append([week_num, day_num, status_color, hover_text, day_text])
+                calendar_data.append([week_num, day_num, status_color, hover_text, day_text, reservation_position])
     
     # Convert to DataFrame
-    cal_df = pd.DataFrame(calendar_data, columns=['week', 'day', 'status', 'hover', 'text'])
+    cal_df = pd.DataFrame(calendar_data, columns=['week', 'day', 'status', 'hover', 'text', 'position'])
     
-    # Create heatmap
+    # Create heatmap with no interactivity
     fig = go.Figure(data=go.Heatmap(
         z=cal_df['status'].values.reshape(len(cal), 7),
-        x=['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+        x=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
         y=[f'Week {i+1}' for i in range(len(cal))],
-        colorscale=[[0, '#f3f4f6'], [0.5, '#fef3c7'], [1, '#d1fae5']],
+        colorscale=[[0, '#f3f4f6'], [0.2, '#fee2e2'], [0.5, '#fef3c7'], [1, '#d1fae5']],
         showscale=False,
-        hovertemplate='%{text}<extra></extra>',
-        text=[[cal_df.iloc[i*7+j]['hover'] for j in range(7)] for i in range(len(cal))]
+        hoverinfo='skip'  # Disable hover
     ))
     
     # Add day numbers as annotations
@@ -313,24 +328,390 @@ def create_calendar_view(df, selected_month, selected_year, is_admin=False):
     for i in range(len(cal)):
         for j in range(7):
             if cal[i][j] != 0:
+                day_text = cal_df.iloc[i*7+j]['text']
+                position = cal_df.iloc[i*7+j]['position']
+                
+                # Determine text color based on status
+                status = cal_df.iloc[i*7+j]['status']
+                if status > 0.8:  # Approved
+                    text_color = '#065f46'  # Dark green
+                    font_weight = 'bold'
+                elif status > 0.3:  # Pending
+                    text_color = '#92400e'  # Dark yellow/orange
+                    font_weight = 'bold'
+                elif status > 0.1:  # Denied
+                    text_color = '#991b1b'  # Dark red
+                    font_weight = 'bold'
+                else:  # Available
+                    text_color = '#374151'  # Dark gray
+                    font_weight = 'normal'
+                
+                # Add text annotation
                 annotations.append(
                     dict(
                         x=j, y=i,
-                        text=str(cal[i][j]),
+                        text=day_text,
                         showarrow=False,
-                        font=dict(color='black', size=12)
+                        font=dict(
+                            color=text_color, 
+                            size=10,
+                            weight=font_weight
+                        ),
+                        xanchor='center',
+                        yanchor='middle'
                     )
                 )
     
+    # Add outline shapes for reservation boundaries
+    shapes = []
+    for i in range(len(cal)):
+        for j in range(7):
+            if cal[i][j] != 0:
+                position = cal_df.iloc[i*7+j]['position']
+                status = cal_df.iloc[i*7+j]['status']
+                
+                if position and status > 0:  # Only add outlines for reserved days
+                    # Determine border style based on position
+                    if position == "start":
+                        # Thick left border
+                        shapes.append(dict(
+                            type="line",
+                            x0=j-0.5, y0=i-0.5, x1=j-0.5, y1=i+0.5,
+                            line=dict(color="black", width=4)
+                        ))
+                    elif position == "end":
+                        # Thick right border
+                        shapes.append(dict(
+                            type="line",
+                            x0=j+0.5, y0=i-0.5, x1=j+0.5, y1=i+0.5,
+                            line=dict(color="black", width=4)
+                        ))
+                    elif position == "single":
+                        # Thick left and right borders
+                        shapes.append(dict(
+                            type="line",
+                            x0=j-0.5, y0=i-0.5, x1=j-0.5, y1=i+0.5,
+                            line=dict(color="black", width=4)
+                        ))
+                        shapes.append(dict(
+                            type="line",
+                            x0=j+0.5, y0=i-0.5, x1=j+0.5, y1=i+0.5,
+                            line=dict(color="black", width=4)
+                        ))
+    
     fig.update_layout(
         annotations=annotations,
+        shapes=shapes,
         title=f"{calendar.month_name[selected_month]} {selected_year}",
         height=400,
         yaxis=dict(autorange='reversed'),
         xaxis=dict(side='top', tickangle=0)
     )
     
+    # Remove all interactivity
+    fig.update_layout(
+        dragmode=False,
+        #selectdirection='d',
+        xaxis=dict(fixedrange=True),
+        yaxis=dict(fixedrange=True)
+    )
+    
     return fig
+
+
+def admin_panel(df):
+    """Enhanced admin panel with three-column layout for reservation management"""
+    st.header("Admin Panel")
+    
+    # Check if DataFrame is empty
+    if df.empty:
+        st.warning("No reservation data available. Please check your Google Sheets connection.")
+        return
+    
+    # Check for required columns
+    required_columns = ['Status', 'Guest Name', 'Email Address', 'Phone Number', 'Check-In', 'Check-Out', 'Number of Guests', 'Notes']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        st.error(f"Missing required columns: {missing_columns}")
+        st.write("Available columns:", list(df.columns))
+        return
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        total_reservations = len(df)
+        st.metric("Total Reservations", total_reservations)
+    
+    with col2:
+        pending_count = len(df[df['Status'] == 'Pending'])
+        st.metric("Pending Approval", pending_count)
+    
+    with col3:
+        approved_count = len(df[df['Status'] == 'Approved'])
+        st.metric("Approved", approved_count)
+    
+    with col4:
+        denied_count = len(df[df['Status'] == 'Denied'])
+        st.metric("Denied", denied_count)
+    
+    st.divider()
+    
+    # Admin Calendar Section
+    st.subheader("📅 Admin Calendar")
+    
+    # Calendar controls
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        admin_selected_month = st.selectbox("Month", 
+                                           options=list(range(1, 13)),
+                                           format_func=lambda x: calendar.month_name[x],
+                                           index=datetime.now().month - 1,
+                                           key="admin_month_select")
+    
+    with col2:
+        admin_selected_year = st.selectbox("Year", 
+                                         options=list(range(2025, 2028)),
+                                         index=0,
+                                         key="admin_year_select")
+    
+    # Display admin calendar
+    admin_calendar_fig = create_calendar_view(df, admin_selected_month, admin_selected_year, is_admin=True)
+    st.plotly_chart(admin_calendar_fig, use_container_width=True)
+    
+    # Enhanced legend for admin calendar
+    st.markdown("""
+    **Legend:**
+    - 🟢 Green: Approved reservation
+    - 🟡 Yellow: Pending approval  
+    - 🔴 Red: Denied reservation
+    - ⚪ White: Available
+    
+    **Reservation Indicators:**
+    - `||Day` : Reservation starts on this day
+    - `Day||` : Reservation ends on this day
+    - `||Day||` : Single-day reservation
+    - `Day` : Middle of multi-day reservation
+    """)
+    
+    st.divider()
+    
+    # Three-column reservation management
+    st.subheader("📋 Reservation Management")
+    
+    # Filter reservations by status using fresh data
+    pending_reservations = df[df['Status'] == 'Pending'].copy()
+    approved_reservations = df[df['Status'] == 'Approved'].copy()
+    denied_reservations = df[df['Status'] == 'Denied'].copy()
+    
+    # Create three columns
+    col1, col2, col3 = st.columns(3)
+    
+    # [Rest of the admin_panel function remains the same...]
+    # Pending Reservations Column
+    with col1:
+        st.markdown('<div class="pending-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">⏳ Pending Reservations</div>', unsafe_allow_html=True)
+        
+        if not pending_reservations.empty:
+            for idx, reservation in pending_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Pending')
+                
+                if action == "approve":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Approved')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+                
+                elif action == "deny":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Denied')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No pending reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Approved Reservations Column
+    with col2:
+        st.markdown('<div class="approved-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">✅ Approved Reservations</div>', unsafe_allow_html=True)
+        
+        if not approved_reservations.empty:
+            for idx, reservation in approved_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Approved')
+                
+                if action == "pending":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Pending')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No approved reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Denied Reservations Column
+    with col3:
+        st.markdown('<div class="denied-column">', unsafe_allow_html=True)
+        st.markdown('<div class="column-header">❌ Denied Reservations</div>', unsafe_allow_html=True)
+        
+        if not denied_reservations.empty:
+            for idx, reservation in denied_reservations.iterrows():
+                action = render_reservation_card(reservation, idx, 'Denied')
+                
+                if action == "approve":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Approved')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+                
+                elif action == "pending":
+                    with st.spinner("Updating status..."):
+                        success, message = update_reservation_status(df, idx, 'Pending')
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("No denied reservations")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.divider()
+    
+    # All reservations table
+    st.subheader("📋 All Reservations Table")
+    
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        status_filter = st.selectbox("Filter by Status", ['All', 'Pending', 'Approved', 'Denied'])
+    with col2:
+        month_filter = st.selectbox("Filter by Month", 
+                                   ['All'] + [calendar.month_name[i] for i in range(1, 13)])
+    
+    # Apply filters
+    filtered_df = df.copy()
+    if status_filter != 'All':
+        filtered_df = filtered_df[filtered_df['Status'] == status_filter]
+    
+    if month_filter != 'All':
+        month_num = list(calendar.month_name).index(month_filter)
+        filtered_df = filtered_df[filtered_df['Check-In'].apply(lambda x: x.month) == month_num]
+    
+    # Format the dataframe for display
+    display_df = filtered_df.copy()
+    if 'Number of Guests' in display_df.columns:
+        display_df['Number of Guests'] = display_df['Number of Guests'].astype(int)
+    
+    # Display table with better formatting
+    st.dataframe(
+        display_df, 
+        use_container_width=True,
+        column_config={
+            "Number of Guests": st.column_config.NumberColumn(
+                "Number of Guests",
+                format="%d"
+            )
+        }
+    )
+
+
+def public_view(df):
+    """Public calendar view for guests with enhanced reservation indicators"""
+    st.header("Schieberl Cabin Reservations")
+    st.markdown('<p class="sub-header">View availability and upcoming reservations</p>', unsafe_allow_html=True)
+    
+    # Calendar controls
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        selected_month = st.selectbox("Month", 
+                                     options=list(range(1, 13)),
+                                     format_func=lambda x: calendar.month_name[x],
+                                     index=datetime.now().month - 1)
+    
+    with col2:
+        selected_year = st.selectbox("Year", 
+                                    options=list(range(2025, 2028)),
+                                    index=0)
+    
+    # Display calendar
+    calendar_fig = create_calendar_view(df, selected_month, selected_year, is_admin=False)
+    st.plotly_chart(calendar_fig, use_container_width=True)
+    
+    # Enhanced legend for public view
+    st.markdown("""
+    **Legend:**
+    - 🟢 Green: Reserved
+    - ⚪ White: Available
+    
+    **Reservation Indicators:**
+    - `||Day` : Reservation starts on this day
+    - `Day||` : Reservation ends on this day  
+    - `||Day||` : Single-day reservation
+    - `Day` : Middle of multi-day reservation
+    """)
+    
+    # Upcoming reservations
+    st.subheader("📅 Upcoming Reservations")
+    
+    # Check if we have the required data for upcoming reservations
+    if df.empty or 'Check-In' not in df.columns:
+        st.info("No reservation data available.")
+        return
+    
+    # Filter for future approved reservations
+    today = datetime.now().date()
+    upcoming = df[(df['Check-In'] >= today) & (df['Status'] == 'Approved')].copy()
+    upcoming = upcoming.sort_values('Check-In')
+    
+    if not upcoming.empty:
+        for _, reservation in upcoming.iterrows():
+            # Format number of guests as integer
+            guest_count = int(reservation['Number of Guests']) if pd.notna(reservation['Number of Guests']) else 0
+            with st.container():
+                st.markdown(f"""
+                <div class="reservation-card">
+                    <strong>{reservation['Guest Name']}</strong><br>
+                    📅 {reservation['Check-In']} to {reservation['Check-Out']}<br>
+                    👥 {guest_count} guests<br>
+                    <span class="status-approved">Approved</span>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No upcoming approved reservations.")
+    
+    # Reservation form link
+    st.subheader("📝 Make a Reservation")
+    st.markdown("""
+    To request a reservation, please fill out the Google Form below:
+    
+    [**🔗 Cabin Reservation Request Form**](https://forms.google.com/your-form-link)
+    
+    """)
 
 def create_empty_calendar(selected_month, selected_year):
     """Create an empty calendar when no data is available"""
@@ -651,7 +1032,7 @@ def admin_panel(df):
     )
 
 def public_view(df):
-    """Public calendar view for guests"""
+    """Public calendar view for guests with enhanced reservation indicators"""
     st.header("Schieberl Cabin Reservations")
     st.markdown('<p class="sub-header">View availability and upcoming reservations</p>', unsafe_allow_html=True)
     
@@ -673,11 +1054,17 @@ def public_view(df):
     calendar_fig = create_calendar_view(df, selected_month, selected_year, is_admin=False)
     st.plotly_chart(calendar_fig, use_container_width=True)
     
-    # Legend (updated for public view)
+    # Enhanced legend for public view
     st.markdown("""
     **Legend:**
     - 🟢 Green: Reserved
     - ⚪ White: Available
+    
+    **Reservation Indicators:**
+    - `||Day` : Reservation starts on this day
+    - `Day||` : Reservation ends on this day  
+    - `||Day||` : Single-day reservation
+    - `Day` : Middle of multi-day reservation
     """)
     
     # Upcoming reservations
